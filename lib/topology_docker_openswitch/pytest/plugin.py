@@ -16,59 +16,80 @@
 # under the License.
 
 from os.path import exists, basename, splitext
-from os import makedirs
-from shutil import copytree, Error
+from shutil import copytree, Error, rmtree
 from logging import warning
+from datetime import datetime
+
+from topology_docker_openswitch.openswitch import log_commands
 
 
 def pytest_runtest_teardown(item):
     """
-    pytest hook to get the name of the test executed, it creates a folder with
-    the name, then copies the folders defined in the shared_dir_mount attribute
-    of each openswitch container, additionally the /var/log/messages of the
-    container is copied to the same folder.
+    Pytest hook to get node information after the test executed.
+
+    This creates a folder with the name of the test case, copies the folders
+    defined in the shared_dir_mount attribute of each openswitch container
+    and the /var/log/messages file inside.
+
+    FIXME: document the item argument
     """
-    if 'topology' in item.funcargs:
-        topology = item.funcargs['topology']
-        if topology.engine == 'docker':
-            logs_path = '/var/log/messages'
-            for node in topology.nodes:
-                node_obj = topology.get(node)
-                if node_obj.metadata.get('type', None) == 'openswitch':
-                    shared_dir = node_obj.shared_dir
-                    try:
-                        node_obj.send_command(
-                            'cat {} > {}/var_messages.log'.format(
-                                logs_path, node_obj.shared_dir_mount
-                            ),
-                            shell='bash',
-                            silent=True
-                        )
-                    except:
-                        warning(
-                            'Unable to get {} from container.'.format(
-                                logs_path
-                            )
-                        )
-                    test_suite = splitext(basename(item.parent.name))[0]
-                    path_name = '/tmp/{}_{}_{}'.format(
-                        test_suite, item.name, str(id(item))
+    test_suite = splitext(basename(item.parent.name))[0]
+    path_name = '/tmp/{}_{}_{}'.format(
+        test_suite, item.name, datetime.now().strftime('%Y_%m_%d_%H_%M_%S')
+    )
+
+    # Being extra-prudent here
+    if exists(path_name):
+        rmtree(path_name)
+
+    if 'topology' not in item.funcargs:
+        from topology_docker_openswitch.openswitch import FAIL_LOG_PATH
+
+        copytree(FAIL_LOG_PATH, path_name)
+        return
+
+    topology = item.funcargs['topology']
+
+    if topology.engine != 'docker':
+        return
+
+    logs_path = '/var/log/messages'
+
+    for node in topology.nodes:
+        node_obj = topology.get(node)
+
+        if node_obj.metadata.get('type', None) != 'openswitch':
+            return
+
+        shared_dir = node_obj.shared_dir
+
+        try:
+            commands = ['cat {}'.format(logs_path)]
+            log_commands(
+                commands, '{}/container_logs'.format(
+                    node_obj.shared_dir_mount
+                ), node_obj._docker_exec, prefix=r'sh -c "', suffix=r'"'
+            )
+        except:
+            warning(
+                'Unable to get {} from node {}.'.format(
+                    logs_path, node_obj.identifier
+                )
+            )
+
+        try:
+            copytree(
+                shared_dir, '{}/{}'.format(
+                    path_name,
+                    basename(shared_dir)
+                )
+            )
+        except Error as err:
+            errors = err.args[0]
+            for error in errors:
+                src, dest, msg = error
+                warning(
+                    'Unable to copy file {}, Error {}'.format(
+                        src, msg
                     )
-                    if not exists(path_name):
-                        makedirs(path_name)
-                    try:
-                        copytree(
-                            shared_dir, '{}/{}'.format(
-                                path_name,
-                                basename(shared_dir)
-                            )
-                        )
-                    except Error as err:
-                        errors = err.args[0]
-                        for error in errors:
-                            src, dest, msg = error
-                            warning(
-                                'Unable to copy file {}, Error {}'.format(
-                                    src, msg
-                                )
-                            )
+                )
