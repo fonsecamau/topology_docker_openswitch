@@ -25,7 +25,10 @@ from __future__ import unicode_literals, absolute_import
 from __future__ import print_function, division
 
 from json import loads
-from subprocess import check_call
+from subprocess import check_call, check_output
+from platform import system, linux_distribution
+from logging import StreamHandler, getLogger, INFO, Formatter
+from sys import stdout
 
 from topology_docker.node import DockerNode
 from topology_docker.shell import DockerBashShell
@@ -206,18 +209,20 @@ if __name__ == '__main__':
 """
 
 
-PROCESS_LOG = """
+PROCESS_LOG = """\
 #!/bin/bash
-ovs-vsctl list Daemon >> /tmp/logs
-echo "Coredump -->" >> /tmp/logs
-coredumpctl gdb >> /tmp/logs
-echo "All the running processes:" >> /tmp/logs
-ps -aef >> /tmp/logs
-
-systemctl status >> /tmp/systemctl
-systemctl --state=failed --all >> /tmp/systemctl
-
-ovsdb-client dump >> /tmp/ovsdb_dump
+echo "Output of \"ovs-vsctl daemon Log\":" >> /var/topology/logs
+ovs-vsctl list Daemon >> /var/topology/logs 2>&1
+echo "Coredump:" >> /var/topology/logs
+coredumpctl gdb >> /var/topology/logs 2>&1
+echo "All the running processes:" >> /var/topology/logs
+ps -aef >> /var/topology/logs 2>&1
+echo "Systemctl status:" >> /var/topology/systemctl
+systemctl status >> /var/topology/systemctl 2>&1
+echo "Systemctl all failing:" >> /var/topology/systemctl
+systemctl --state=failed --all >> /var/topology/systemctl 2>&1
+echo "ovsdb client dump:" >> /var/topology/ovsdb_dump
+ovsdb-client dump >> /var/topology/ovsdb_dump 2>&1
 """
 
 
@@ -283,6 +288,73 @@ class OpenSwitchNode(DockerNode):
         super(OpenSwitchNode, self).notify_post_build()
         self._setup_system()
 
+    def dump_docker_log_file(self):
+        """
+        This function dumps the last "LINES_TO_DUMP" lines from the docker
+        daemon logs
+        Docker daemon logs can be gathered by different means depending on
+        the host OS
+        For example:
+            Ubuntu - /var/log/upstart/docker.log
+            CentOS - /var/log/daemon.log | grep docker
+            Boot2Docker - /var/log/docker.log
+            Debian GNU/Linux - /var/log/daemon.log
+            Fedora - journalctl -u docker.service
+            Red Hat Enterprise Linux Server - /var/log/messages | grep docker
+            OpenSuSE - journalctl -u docker.service
+        For now we'll cater to Ubuntu & CentOS cases alone.
+        """
+        log = getLogger(__name__)
+        log_hdlr = StreamHandler(stream=stdout)
+        log_hdlr.setFormatter(Formatter('%(asctime)s %(message)s'))
+        log_hdlr.setLevel(INFO)
+        log.addHandler(log_hdlr)
+        log.setLevel(INFO)
+        lines_to_dump = 100
+        docker_log_file = ''
+        docker_filter = ''
+        platform_dict = {}
+        cat_cmd = ''
+
+        platform_dict['platform_system'] = str(system()).lower()
+        platform_dict['platform_version'] = (
+            str(linux_distribution()[0]).lower()
+        )
+
+        log.info('############## Docker logs info ##############')
+
+        if ('linux' == platform_dict['platform_system'] and
+           'ubuntu' == platform_dict['platform_version']):
+            docker_log_file = '/var/log/upstart/docker.log'
+            cat_cmd = 'cat {}'.format(docker_log_file)
+        elif ('linux' == platform_dict['platform_system'] and
+              'centos' == platform_dict['platform_version']):
+            docker_log_file = '/var/log/daemon.log'
+            docker_filter = 'docker'
+            cat_cmd = ('grep {filter} {file}'
+                       .format(file=docker_log_file,
+                               filter=docker_filter))
+        else:
+            log.info('dumpDockerLogFile: Unknown platform')
+            return
+
+        try:
+            lines = check_output(
+                cat_cmd, shell=True
+            ).decode('utf-8').splitlines()
+        except:
+            lines = 'dumpDockerLogFile: Unknown platform'
+            log.info('dumpDockerLogFile: Docker daemon log file not found')
+
+        log.info('Printing last %d lines from the docker daemon log\n' %
+                 lines_to_dump)
+
+        lines = lines[-lines_to_dump:]
+        for line in lines:
+            log.info(line)
+
+        log.info('############## End docker logs info ##############')
+
     def _setup_system(self):
         """
         Setup the OpenSwitch image for testing.
@@ -311,8 +383,12 @@ class OpenSwitchNode(DockerNode):
             check_call('touch {}/logs'.format(self.shared_dir), shell=True)
             check_call('chmod 766 {}/logs'.format(self.shared_dir),
                        shell=True)
-            self._docker_exec('/bin/bash {}/process_log.sh'
-                              .format(self.shared_dir_mount))
+
+            try:
+                self._docker_exec('/bin/bash {}/process_log.sh'
+                                  .format(self.shared_dir_mount))
+            except:
+                raise Exception('Failed executing log script')
             check_call(
                 'tail -n 2000 /var/log/syslog > {}/syslog'.format(
                     self.shared_dir
@@ -322,6 +398,7 @@ class OpenSwitchNode(DockerNode):
                 shell=True
             )
             check_call('cat {}/logs'.format(self.shared_dir), shell=True)
+            self.dump_docker_log_file()
             raise e
 
         # Read back port mapping
