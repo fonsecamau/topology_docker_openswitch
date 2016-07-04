@@ -28,7 +28,9 @@ from json import loads
 from subprocess import check_call
 
 from topology_docker.node import DockerNode
-from topology_docker.shell import DockerShell, DockerBashShell
+from topology_docker.shell import DockerBashShell
+
+from .shell import OpenSwitchVtyshShell
 
 
 SETUP_SCRIPT = """\
@@ -249,10 +251,8 @@ class OpenSwitchNode(DockerNode):
         )
 
         # Add vtysh (default) shell
-        # FIXME: Create a subclass to handle better the particularities of
-        # vtysh, like prompt setup etc.
-        self._shells['vtysh'] = DockerShell(
-            self.container_id, 'vtysh', '(^|\n)switch(\([\-a-zA-Z0-9]*\))?#'
+        self._shells['vtysh'] = OpenSwitchVtyshShell(
+            self.container_id
         )
 
         # Add bash shells
@@ -347,6 +347,15 @@ class OpenSwitchNode(DockerNode):
 
         command = '{prefix} ip link set dev {iface} {state}'.format(**locals())
         self._docker_exec(command)
+
+    def stop(self):
+        """
+        See :meth:`topology_docker.node.DockerNode.stop` for more information.
+
+        This method attempts a clean exit from the vtysh shell.
+        """
+        self._shells['vtysh']._exit()
+        super(OpenSwitchNode, self).stop()
 
 
 __all__ = ['OpenSwitchNode']
