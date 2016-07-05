@@ -234,6 +234,7 @@ class OpenSwitchNode(DockerNode):
     def __init__(
             self, identifier,
             image='topology/ops:latest', binds=None,
+            environment={'container': 'docker'},
             **kwargs):
 
         # Add binded directories
