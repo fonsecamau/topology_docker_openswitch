@@ -28,7 +28,8 @@ from json import loads
 from subprocess import check_call
 
 from topology_docker.node import DockerNode
-from topology_docker.shell import DockerShell, DockerBashShell
+from topology_docker_openswitch.shell import DockerOpsShell
+from topology_docker.shell import DockerBashShell
 
 
 SETUP_SCRIPT = """\
@@ -251,7 +252,7 @@ class OpenSwitchNode(DockerNode):
         # Add vtysh (default) shell
         # FIXME: Create a subclass to handle better the particularities of
         # vtysh, like prompt setup etc.
-        self._shells['vtysh'] = DockerShell(
+        self._shells['vtysh'] = DockerOpsShell(
             self.container_id, 'vtysh', '(^|\n)switch(\([\-a-zA-Z0-9]*\))?#'
         )
 
