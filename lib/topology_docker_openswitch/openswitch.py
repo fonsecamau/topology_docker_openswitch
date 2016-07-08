@@ -25,7 +25,7 @@ from __future__ import unicode_literals, absolute_import
 from __future__ import print_function, division
 
 from json import loads
-from subprocess import check_call, check_output
+from subprocess import check_output, CalledProcessError
 from platform import system, linux_distribution
 from logging import StreamHandler, getLogger, INFO, Formatter
 from sys import stdout
@@ -209,23 +209,6 @@ if __name__ == '__main__':
 """
 
 
-PROCESS_LOG = """\
-#!/bin/bash
-echo "Output of \"ovs-vsctl daemon Log\":" >> /var/topology/logs
-ovs-vsctl list Daemon >> /var/topology/logs 2>&1
-echo "Coredump:" >> /var/topology/logs
-coredumpctl gdb >> /var/topology/logs 2>&1
-echo "All the running processes:" >> /var/topology/logs
-ps -aef >> /var/topology/logs 2>&1
-echo "Systemctl status:" >> /var/topology/systemctl
-systemctl status >> /var/topology/systemctl 2>&1
-echo "Systemctl all failing:" >> /var/topology/systemctl
-systemctl --state=failed --all >> /var/topology/systemctl 2>&1
-echo "ovsdb client dump:" >> /var/topology/ovsdb_dump
-ovsdb-client dump >> /var/topology/ovsdb_dump 2>&1
-"""
-
-
 class OpenSwitchNode(DockerNode):
     """
     Custom OpenSwitch node for the Topology Docker platform engine.
@@ -288,73 +271,6 @@ class OpenSwitchNode(DockerNode):
         super(OpenSwitchNode, self).notify_post_build()
         self._setup_system()
 
-    def dump_docker_log_file(self):
-        """
-        This function dumps the last "LINES_TO_DUMP" lines from the docker
-        daemon logs
-        Docker daemon logs can be gathered by different means depending on
-        the host OS
-        For example:
-            Ubuntu - /var/log/upstart/docker.log
-            CentOS - /var/log/daemon.log | grep docker
-            Boot2Docker - /var/log/docker.log
-            Debian GNU/Linux - /var/log/daemon.log
-            Fedora - journalctl -u docker.service
-            Red Hat Enterprise Linux Server - /var/log/messages | grep docker
-            OpenSuSE - journalctl -u docker.service
-        For now we'll cater to Ubuntu & CentOS cases alone.
-        """
-        log = getLogger(__name__)
-        log_hdlr = StreamHandler(stream=stdout)
-        log_hdlr.setFormatter(Formatter('%(asctime)s %(message)s'))
-        log_hdlr.setLevel(INFO)
-        log.addHandler(log_hdlr)
-        log.setLevel(INFO)
-        lines_to_dump = 100
-        docker_log_file = ''
-        docker_filter = ''
-        platform_dict = {}
-        cat_cmd = ''
-
-        platform_dict['platform_system'] = str(system()).lower()
-        platform_dict['platform_version'] = (
-            str(linux_distribution()[0]).lower()
-        )
-
-        log.info('############## Docker logs info ##############')
-
-        if ('linux' == platform_dict['platform_system'] and
-           'ubuntu' == platform_dict['platform_version']):
-            docker_log_file = '/var/log/upstart/docker.log'
-            cat_cmd = 'cat {}'.format(docker_log_file)
-        elif ('linux' == platform_dict['platform_system'] and
-              'centos' == platform_dict['platform_version']):
-            docker_log_file = '/var/log/daemon.log'
-            docker_filter = 'docker'
-            cat_cmd = ('grep {filter} {file}'
-                       .format(file=docker_log_file,
-                               filter=docker_filter))
-        else:
-            log.info('dumpDockerLogFile: Unknown platform')
-            return
-
-        try:
-            lines = check_output(
-                cat_cmd, shell=True
-            ).decode('utf-8').splitlines()
-        except:
-            lines = 'dumpDockerLogFile: Unknown platform'
-            log.info('dumpDockerLogFile: Docker daemon log file not found')
-
-        log.info('Printing last %d lines from the docker daemon log\n' %
-                 lines_to_dump)
-
-        lines = lines[-lines_to_dump:]
-        for line in lines:
-            log.info(line)
-
-        log.info('############## End docker logs info ##############')
-
     def _setup_system(self):
         """
         Setup the OpenSwitch image for testing.
@@ -363,13 +279,6 @@ class OpenSwitchNode(DockerNode):
         #. Assign an interface to each port label.
         #. Create remaining interfaces.
         """
-
-        # Write the log gathering script
-        process_log = '{}/process_log.sh'.format(self.shared_dir)
-        with open(process_log, "w") as fd:
-            fd.write(PROCESS_LOG)
-        check_call('chmod 755 {}/process_log.sh'.format(self.shared_dir),
-                   shell=True)
 
         # Write and execute setup script
         setup_script = '{}/openswitch_setup.py'.format(self.shared_dir)
@@ -380,25 +289,119 @@ class OpenSwitchNode(DockerNode):
             self._docker_exec('python {}/openswitch_setup.py -d'
                               .format(self.shared_dir_mount))
         except Exception as e:
-            check_call('touch {}/logs'.format(self.shared_dir), shell=True)
-            check_call('chmod 766 {}/logs'.format(self.shared_dir),
-                       shell=True)
+            lines_to_dump = 100
 
-            try:
-                self._docker_exec('/bin/bash {}/process_log.sh'
-                                  .format(self.shared_dir_mount))
-            except:
-                raise Exception('Failed executing log script')
-            check_call(
-                'tail -n 2000 /var/log/syslog > {}/syslog'.format(
-                    self.shared_dir
-                ), shell=True)
-            check_call(
-                'docker ps -a >> {}/logs'.format(self.shared_dir),
+            platforms_log_location = {
+                'Ubuntu': 'cat /var/log/upstart/docker.log',
+                'CentOS Linux': 'grep docker /var/log/daemon.log',
+                # FIXME: find the right values for the next dictionary keys:
+                # 'boot2docker': 'cat /var/log/docker.log',
+                # 'debian': 'cat /var/log/daemon.log',
+                # 'fedora': 'journalctl -u docker.service',
+                # 'red hat': 'grep docker /var/log/messages',
+                # 'opensuse': 'journalctl -u docker.service'
+            }
+
+            # Here, we find the command to dump the last "lines_to_dump" lines
+            # of the docker log file in the logs. The location of the docker
+            # log file depends on the Linux distribution. These locations are
+            # defined the in "platforms_log_location" dictionary.
+
+            log = getLogger(__name__)
+            log_hdlr = StreamHandler(stream=stdout)
+            log_hdlr.setFormatter(Formatter('%(asctime)s %(message)s'))
+            log_hdlr.setLevel(INFO)
+            log.addHandler(log_hdlr)
+            log.setLevel(INFO)
+
+            operating_system = system()
+
+            if operating_system != 'Linux':
+                log.warning(
+                    'Operating system is not Linux but {}.'.format(
+                        operating_system
+                    )
+                )
+                return
+
+            linux_distro = linux_distribution()[0]
+
+            if linux_distro not in platforms_log_location.keys():
+                log.warning(
+                    'Unknown Linux distribution {}.'.format(
+                        linux_distro
+                    )
+                )
+
+            docker_log_command = '{} | tail -n {}'.format(
+                platforms_log_location[linux_distro], lines_to_dump
+            )
+
+            container_commands = [
+                'ovs-vsctl list Daemon',
+                'coredumpctl gdb',
+                'ps -aef',
+                'systemctl status',
+                'systemctl --state=failed --all',
+                'ovsdb-client dump',
+                'systemctl status switchd -n 10000 -l'
+            ]
+
+            execution_machine_commands = [
+                'tail -n 2000 /var/log/syslog',
+                'docker ps -a',
+                docker_log_command
+            ]
+
+            def log_commands(
+                commands, location, function, escape=True,
+                prefix=None, suffix=None, **kwargs
+            ):
+                if prefix is None:
+                    prefix = ''
+                if suffix is None:
+                    suffix = ''
+
+                for command in commands:
+                    log_path = ' >> {} 2>&1'.format(location)
+                    args = [
+                        r'{prefix}echo \"Output of:'
+                        r' {command}{log_path}\"{log_path}{suffix}'.format(
+                            prefix=prefix, command=command,
+                            log_path=log_path, suffix=suffix
+                        ),
+                        r'{}{}{}{}'.format(
+                            prefix, command, log_path, suffix
+                        ),
+                        r'{}echo \"\"{}{}'.format(prefix, log_path, suffix)
+                    ]
+
+                    for arg in args:
+                        try:
+                            if not escape:
+                                arg = arg.replace('\\', '')
+                            function(arg, **kwargs)
+
+                        except CalledProcessError as error:
+                            log.warning(
+                                '{} failed with error {}.'.format(
+                                    command, error.returncode
+                                )
+                            )
+            log_commands(
+                container_commands,
+                '{}/container_logs'.format(self.shared_dir_mount),
+                self._docker_exec,
+                prefix=r'sh -c "',
+                suffix=r'"'
+            )
+            log_commands(
+                execution_machine_commands,
+                '{}/execution_machine_logs'.format(self.shared_dir),
+                check_output,
+                escape=False,
                 shell=True
             )
-            check_call('cat {}/logs'.format(self.shared_dir), shell=True)
-            self.dump_docker_log_file()
             raise e
 
         # Read back port mapping
