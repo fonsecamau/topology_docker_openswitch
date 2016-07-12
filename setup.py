@@ -94,7 +94,7 @@ setup(
     # Entry points
     entry_points={
         'pytest11': ['topology_docker_openswitch '
-                     '= topology_docker_openswitch.plugin.plugin'],
+                     '= topology_docker_openswitch.pytest.plugin'],
         'topology_docker_node_10': [
             'openswitch = topology_docker_openswitch.openswitch:OpenSwitchNode'
         ]

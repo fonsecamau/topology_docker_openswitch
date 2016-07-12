@@ -44,9 +44,11 @@ def pytest_runtest_teardown(item):
                             shell='bash',
                             silent=True
                         )
-                    except Error:
+                    except:
                         warning(
-                            'Unable to get {} from container'.format(logs_path)
+                            'Unable to get {} from container.'.format(
+                                logs_path
+                            )
                         )
                     test_suite = splitext(basename(item.parent.name))[0]
                     path_name = '/tmp/{}_{}_{}'.format(
