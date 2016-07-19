@@ -208,6 +208,50 @@ if __name__ == '__main__':
     main()
 """
 
+LOG = getLogger(__name__)
+LOG_HDLR = StreamHandler(stream=stdout)
+LOG_HDLR.setFormatter(Formatter('%(asctime)s %(message)s'))
+LOG_HDLR.setLevel(INFO)
+LOG.addHandler(LOG_HDLR)
+LOG.setLevel(INFO)
+
+
+def log_commands(
+    commands, location, function, escape=True,
+    prefix=None, suffix=None, **kwargs
+):
+    if prefix is None:
+        prefix = ''
+    if suffix is None:
+        suffix = ''
+
+    for command in commands:
+        log_path = ' >> {} 2>&1'.format(location)
+        args = [
+            r'{prefix}echo \"Output of:'
+            r' {command}{log_path}\"{log_path}{suffix}'.format(
+                prefix=prefix, command=command,
+                log_path=log_path, suffix=suffix
+            ),
+            r'{}{}{}{}'.format(
+                prefix, command, log_path, suffix
+            ),
+            r'{}echo \"\"{}{}'.format(prefix, log_path, suffix)
+        ]
+
+        for arg in args:
+            try:
+                if not escape:
+                    arg = arg.replace('\\', '')
+                function(arg, **kwargs)
+
+            except CalledProcessError as error:
+                LOG.warning(
+                    '{} failed with error {}.'.format(
+                        command, error.returncode
+                    )
+                )
+
 
 class OpenSwitchNode(DockerNode):
     """
@@ -307,17 +351,10 @@ class OpenSwitchNode(DockerNode):
             # log file depends on the Linux distribution. These locations are
             # defined the in "platforms_log_location" dictionary.
 
-            log = getLogger(__name__)
-            log_hdlr = StreamHandler(stream=stdout)
-            log_hdlr.setFormatter(Formatter('%(asctime)s %(message)s'))
-            log_hdlr.setLevel(INFO)
-            log.addHandler(log_hdlr)
-            log.setLevel(INFO)
-
             operating_system = system()
 
             if operating_system != 'Linux':
-                log.warning(
+                LOG.warning(
                     'Operating system is not Linux but {}.'.format(
                         operating_system
                     )
@@ -327,7 +364,7 @@ class OpenSwitchNode(DockerNode):
             linux_distro = linux_distribution()[0]
 
             if linux_distro not in platforms_log_location.keys():
-                log.warning(
+                LOG.warning(
                     'Unknown Linux distribution {}.'.format(
                         linux_distro
                     )
@@ -353,41 +390,6 @@ class OpenSwitchNode(DockerNode):
                 docker_log_command
             ]
 
-            def log_commands(
-                commands, location, function, escape=True,
-                prefix=None, suffix=None, **kwargs
-            ):
-                if prefix is None:
-                    prefix = ''
-                if suffix is None:
-                    suffix = ''
-
-                for command in commands:
-                    log_path = ' >> {} 2>&1'.format(location)
-                    args = [
-                        r'{prefix}echo \"Output of:'
-                        r' {command}{log_path}\"{log_path}{suffix}'.format(
-                            prefix=prefix, command=command,
-                            log_path=log_path, suffix=suffix
-                        ),
-                        r'{}{}{}{}'.format(
-                            prefix, command, log_path, suffix
-                        ),
-                        r'{}echo \"\"{}{}'.format(prefix, log_path, suffix)
-                    ]
-
-                    for arg in args:
-                        try:
-                            if not escape:
-                                arg = arg.replace('\\', '')
-                            function(arg, **kwargs)
-
-                        except CalledProcessError as error:
-                            log.warning(
-                                '{} failed with error {}.'.format(
-                                    command, error.returncode
-                                )
-                            )
             log_commands(
                 container_commands,
                 '{}/container_logs'.format(self.shared_dir_mount),
