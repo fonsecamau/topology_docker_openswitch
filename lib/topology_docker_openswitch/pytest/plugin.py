@@ -16,9 +16,9 @@
 # under the License.
 
 from os.path import exists, basename, splitext
-from os import makedirs
-from shutil import copytree, Error
+from shutil import copytree, Error, rmtree
 from logging import warning
+from datetime import datetime
 
 from topology_docker_openswitch.openswitch import log_commands
 
@@ -34,7 +34,19 @@ def pytest_runtest_teardown(item):
     FIXME: document the item argument
     """
 
+    test_suite = splitext(basename(item.parent.name))[0]
+    path_name = '/tmp/{}_{}_{}'.format(
+        test_suite, item.name, datetime.now().strftime('%Y_%m_%d_%H_%M_%S')
+    )
+
+    # Being extra-prudent here
+    if exists(path_name):
+        rmtree(path_name)
+
     if 'topology' not in item.funcargs:
+        from topology_docker_openswitch.openswitch import FAIL_LOG_PATH
+
+        copytree(FAIL_LOG_PATH, path_name)
         return
 
     topology = item.funcargs['topology']
@@ -53,24 +65,19 @@ def pytest_runtest_teardown(item):
         shared_dir = node_obj.shared_dir
 
         try:
-            # Be careful to match the echo command and the path of the
-            # container_logs file with the one defined in
-            # :meth:topology_docker_openswitch.pytest.openswitch._setup_system
             commands = ['cat {}'.format(logs_path)]
-            log_commands(commands, )
+            log_commands(
+                commands, '{}/container_logs'.format(
+                    node_obj.shared_dir_mount
+                ), node_obj._docker_exec, prefix=r'sh -c "', suffix=r'"'
+            )
         except:
             warning(
                 'Unable to get {} from node {}.'.format(
-                    logs_path, node.identifier
+                    logs_path, node_obj.identifier
                 )
             )
 
-        test_suite = splitext(basename(item.parent.name))[0]
-        path_name = '/tmp/{}_{}_{}'.format(
-            test_suite, item.name, str(id(item))
-        )
-        if not exists(path_name):
-            makedirs(path_name)
         try:
             copytree(
                 shared_dir, '{}/{}'.format(

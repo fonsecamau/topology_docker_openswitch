@@ -35,6 +35,11 @@ from topology_docker.shell import DockerBashShell
 
 from .shell import OpenSwitchVtyshShell
 
+# When a failure happens during boot time, logs and other information is
+# collected to help with the debugging. The path of this collection is to be
+# stored here at module level to be able to import it in the pytest teardown
+# hook later.
+FAIL_LOG_PATH = None
 
 SETUP_SCRIPT = """\
 import logging
@@ -130,6 +135,7 @@ def create_interfaces():
     check_call(shsplit('touch /tmp/ops-virt-ports-ready'))
     logging.info('  - Ports readiness notified to the image')
 
+
 def cur_cfg_is_set():
     global sock
     if sock is None:
@@ -141,6 +147,7 @@ def cur_cfg_is_set():
         return response['result'][0]['rows'][0]['cur_hw'] == 1
     except IndexError:
         return 0
+
 
 def main():
 
@@ -333,6 +340,7 @@ class OpenSwitchNode(DockerNode):
             self._docker_exec('python {}/openswitch_setup.py -d'
                               .format(self.shared_dir_mount))
         except Exception as e:
+            global FAIL_LOG_PATH
             lines_to_dump = 100
 
             platforms_log_location = {
@@ -381,7 +389,8 @@ class OpenSwitchNode(DockerNode):
                 'systemctl status',
                 'systemctl --state=failed --all',
                 'ovsdb-client dump',
-                'systemctl status switchd -n 10000 -l'
+                'systemctl status switchd -n 10000 -l',
+                'cat /var/log/messages'
             ]
 
             execution_machine_commands = [
@@ -404,6 +413,9 @@ class OpenSwitchNode(DockerNode):
                 escape=False,
                 shell=True
             )
+
+            FAIL_LOG_PATH = self.shared_dir
+
             raise e
 
         # Read back port mapping

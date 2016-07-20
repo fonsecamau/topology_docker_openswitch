@@ -46,8 +46,9 @@ class OpenSwitchVtyshShell(DockerShell):
         Attempt a clean exit from the shell.
         """
         try:
-            self.send_command('end')
-            self.send_command('exit', matches=[EOF])
+            EOF
+            # self.send_command('end')
+            # self.send_command('exit', matches=[EOF])
         except Exception as error:
             warning(
                 'Exiting the shell failed with this error: {}'.format(
