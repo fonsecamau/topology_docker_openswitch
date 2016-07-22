@@ -38,8 +38,8 @@ from .shell import OpenSwitchVtyshShell
 # When a failure happens during boot time, logs and other information is
 # collected to help with the debugging. The path of this collection is to be
 # stored here at module level to be able to import it in the pytest teardown
-# hook later.
-FAIL_LOG_PATH = None
+# hook later. Non-failing containers will append their log paths here also.
+LOG_PATHS = []
 
 SETUP_SCRIPT = """\
 import logging
@@ -340,8 +340,11 @@ class OpenSwitchNode(DockerNode):
             fd.write(SETUP_SCRIPT)
 
         try:
-            self._docker_exec('python {}/openswitch_setup.py -d'
-                              .format(self.shared_dir_mount))
+            self._docker_exec(
+                'python {}/openswitch_setup.py -d'.format(
+                    self.shared_dir_mount
+                )
+            )
         except Exception as e:
             global FAIL_LOG_PATH
             lines_to_dump = 100
@@ -416,14 +419,15 @@ class OpenSwitchNode(DockerNode):
                 escape=False,
                 shell=True
             )
-
-            FAIL_LOG_PATH = self.shared_dir
+            LOG_PATHS.append(self.shared_dir)
 
             raise e
         # Read back port mapping
         port_mapping = '{}/port_mapping.json'.format(self.shared_dir)
         with open(port_mapping, 'r') as fd:
             mappings = loads(fd.read())
+
+        LOG_PATHS.append(self.shared_dir)
 
         if hasattr(self, 'ports'):
             self.ports.update(mappings)

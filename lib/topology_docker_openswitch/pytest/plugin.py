@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-from os.path import exists, basename, splitext
+from os.path import exists, basename, splitext, join
 from shutil import copytree, Error, rmtree
 from logging import warning
 from datetime import datetime
@@ -34,7 +34,7 @@ def pytest_runtest_teardown(item):
     FIXME: document the item argument
     """
     test_suite = splitext(basename(item.parent.name))[0]
-    path_name = '/tmp/{}_{}_{}'.format(
+    path_name = '/tmp/topology/docker/{}_{}_{}'.format(
         test_suite, item.name, datetime.now().strftime('%Y_%m_%d_%H_%M_%S')
     )
 
@@ -43,9 +43,12 @@ def pytest_runtest_teardown(item):
         rmtree(path_name)
 
     if 'topology' not in item.funcargs:
-        from topology_docker_openswitch.openswitch import FAIL_LOG_PATH
+        from topology_docker_openswitch.openswitch import LOG_PATHS
 
-        copytree(FAIL_LOG_PATH, path_name)
+        for log_path in LOG_PATHS:
+            copytree(log_path, join(path_name, basename(log_path)))
+            rmtree(path_name)
+
         return
 
     topology = item.funcargs['topology']
@@ -66,9 +69,8 @@ def pytest_runtest_teardown(item):
         try:
             commands = ['cat {}'.format(logs_path)]
             log_commands(
-                commands, '{}/container_logs'.format(
-                    node_obj.shared_dir_mount
-                ), node_obj._docker_exec, prefix=r'sh -c "', suffix=r'"'
+                commands, join(node_obj.shared_dir_mount, 'container_logs'),
+                node_obj._docker_exec, prefix=r'sh -c "', suffix=r'"'
             )
         except:
             warning(
@@ -78,12 +80,8 @@ def pytest_runtest_teardown(item):
             )
 
         try:
-            copytree(
-                shared_dir, '{}/{}'.format(
-                    path_name,
-                    basename(shared_dir)
-                )
-            )
+            copytree(shared_dir, join(path_name, basename(shared_dir)))
+            rmtree(shared_dir)
         except Error as err:
             errors = err.args[0]
             for error in errors:
