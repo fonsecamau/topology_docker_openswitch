@@ -248,7 +248,7 @@ class OpenSwitchNode(DockerNode):
         super(OpenSwitchNode, self).__init__(
             identifier, image=image, command='/sbin/init',
             binds=';'.join(container_binds), hostname='switch',
-            **kwargs
+            tty=False, **kwargs
         )
 
         # Add vtysh (default) shell
